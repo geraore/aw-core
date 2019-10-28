@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 class Datastore:
     def __init__(self, storage_strategy: Callable[..., AbstractStorage], testing=False) -> None:
         self.logger = logger.getChild("Datastore")
-        self.bucket_instances = dict()  # type: Dict[str, Bucket]
+        self.bucket_instances: Dict[str, Bucket] = dict()
 
         self.storage_strategy = storage_strategy(testing=testing)
 
@@ -46,6 +46,9 @@ class Datastore:
 
     def buckets(self):
         return self.storage_strategy.buckets()
+
+    def get_all_events(self,limit: int, hostname: str, username: str):
+        return self.storage_strategy.get_all_events(limit=limit,hostname=hostname,username=username)
 
 
 class Bucket:
@@ -82,22 +85,14 @@ class Bucket:
         If a single event is inserted, return the event with its id assigned.
         If several events are inserted, returns None. (This is due to there being no efficient way of getting ids out when doing bulk inserts with some datastores such as peewee/SQLite)
         """
-        # NOTE: Should we keep the timestamp checking?
-        # Get last event for timestamp check after insert
-        """
-        last_event_list = self.get(1)
-        last_event = None
-        if last_event_list:
-            last_event = last_event_list[0]
-        """
 
         now = datetime.now(tz=timezone.utc)
 
-        inserted = None  # type: Optional[Event]
+        inserted: Optional[Event] = None
 
         # Call insert
         if isinstance(events, Event):
-            oldest_event = events  # type: Optional[Event]
+            oldest_event: Optional[Event] = events
             if events.timestamp + events.duration > now:
                 self.logger.warning("Event inserted into bucket {} reaches into the future. Current UTC time: {}. Event data: {}".format(self.bucket_id, str(now), str(events)))
             inserted = self.ds.storage_strategy.insert_one(self.bucket_id, events)

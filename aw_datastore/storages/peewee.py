@@ -51,8 +51,12 @@ class BucketModel(BaseModel):
     hostname = CharField()
 
     def json(self):
-        return {"id": self.id, "created": iso8601.parse_date(self.created).astimezone(timezone.utc).isoformat(),
-                "name": self.name, "type": self.type, "client": self.client,
+        return {"key": self.key,
+                "id": self.id,
+                "created": iso8601.parse_date(self.created).astimezone(timezone.utc).isoformat(),
+                "name": self.name,
+                "type": self.type,
+                "client": self.client,
                 "hostname": self.hostname}
 
 
@@ -70,6 +74,7 @@ class EventModel(BaseModel):
     def json(self):
         return {
             "id": self.id,
+            #"bucket": self.bucket,
             "timestamp": self.timestamp,
             "duration": float(self.duration),
             "data": json.loads(self.datastr)
@@ -91,7 +96,7 @@ class PeeweeStorage(AbstractStorage):
 
         self.db.connect()
 
-        self.bucket_keys = {}  # type: Dict[str, int]
+        self.bucket_keys: Dict[str, int] = {}
         BucketModel.create_table(safe=True)
         EventModel.create_table(safe=True)
         self.update_bucket_keys()
@@ -136,9 +141,6 @@ class PeeweeStorage(AbstractStorage):
                             "duration": event.duration.total_seconds(),
                             "datastr": json.dumps(event.data)}
                            for event in events]
-        # Chunking into lists of length 100 is needed here due to SQLITE_MAX_COMPOUND_SELECT
-        # and SQLITE_LIMIT_VARIABLE_NUMBER under Windows.
-        # See: https://github.com/coleifer/peewee/issues/948
         for chunk in chunks(events_dictlist, 100):
             EventModel.insert_many(chunk).execute()
 
@@ -155,6 +157,7 @@ class PeeweeStorage(AbstractStorage):
                          .get()
 
     def replace_last(self, bucket_id, event):
+        #TODO add a call to the web service every
         e = self._get_last(bucket_id)
         e.timestamp = event.timestamp
         e.duration = event.duration.total_seconds()
@@ -182,12 +185,8 @@ class PeeweeStorage(AbstractStorage):
                    starttime: Optional[datetime] = None, endtime: Optional[datetime] = None):
         if limit == 0:
             return []
-        q = EventModel.select() \
-                      .where(EventModel.bucket == self.bucket_keys[bucket_id]) \
-                      .order_by(EventModel.timestamp.desc()) \
-                      .limit(limit)
+        q = EventModel.select().where(EventModel.bucket == self.bucket_keys[bucket_id]).order_by(EventModel.timestamp.desc()).limit(limit)
         if starttime:
-            # Important to normalize datetimes to UTC, otherwise any UTC offset will be ignored
             starttime = starttime.astimezone(timezone.utc)
             q = q.where(starttime <= EventModel.timestamp)
         if endtime:
@@ -195,12 +194,19 @@ class PeeweeStorage(AbstractStorage):
             q = q.where(EventModel.timestamp <= endtime)
         return [Event(**e) for e in list(map(EventModel.json, q.execute()))]
 
-    def get_eventcount(self, bucket_id: str,
-                       starttime: Optional[datetime] = None, endtime: Optional[datetime] = None):
-        q = EventModel.select() \
-                      .where(EventModel.bucket == self.bucket_keys[bucket_id])
+    def get_all_events(self, limit: int, hostname: str, username: str):
+        elements = []
+        if limit == 0:
+            return elements
+        q = EventModel.select(EventModel.id,EventModel.timestamp,EventModel.duration,EventModel.bucket,EventModel.datastr).order_by(EventModel.timestamp.desc()).limit(limit)
+        for e in q:
+            appname = json.loads(e.datastr)['app']
+            elements.append({'id':e.id, 'bucket_id':e.bucket_id,'appname':appname, 'duration':str(e.duration), 'timestamp':e.timestamp, 'hostname':hostname, 'username':username})
+        return elements
+
+    def get_eventcount(self, bucket_id: str,  starttime: Optional[datetime] = None, endtime: Optional[datetime] = None):
+        q = EventModel.select().where(EventModel.bucket == self.bucket_keys[bucket_id])
         if starttime:
-            # Important to normalize datetimes to UTC, otherwise any UTC offset will be ignored
             starttime = starttime.astimezone(timezone.utc)
             q = q.where(starttime <= EventModel.timestamp)
         if endtime:
